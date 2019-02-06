@@ -4,7 +4,7 @@
 ###### Dependencies #########################
 #############################################
 using Random
-#using Plots
+
 using DataFrames
 using JSON
 using CSV
@@ -69,7 +69,7 @@ function ExecuteReaction(concentrations::Array{Float64,1}, CRS::CRS, rID::Int64)
         for (j, p) in enumerate(rxn.products)
             concentrations[p] -= rxn.prod_coef[j]
         end
-        println("Concentration of Reactants: ",concentrations[rxn.reactants])
+        #println("Concentration of Reactants: ",concentrations[rxn.reactants])
         println("Rxn Propensity based on concentrations: ", STD_propensity(rxn, concentrations))
         error("Concentrations went negative on reaction $rID")
         
@@ -228,7 +228,9 @@ function Run_MoBlue(Mo1_mass::Int64, total_time::Float64, k_f::Float64, stable_b
             current_mass = calculate_mass(concentrations, MoBlueCRS)::Float64
             if current_mass != Mo1_mass
                 println(MoBlueCRS.reaction_list[rID])
-                println(MoBlueCRS.molecule_dict[MoBlueCRS.reaction_list[rID].reactants],MoBlueCRS.molecule_list[MoBlueCRS.reaction_list[rID].products] )
+                println(current_mass)
+                println(concentrations)
+                #println(MoBlueCRS.molecule_dict[MoBlueCRS.reaction_list[rID].reactants],MoBlueCRS.molecule_list[MoBlueCRS.reaction_list[rID].products] )
                 error("Conservation of Mass not maintained.. Exiting Simulation")
             end
             output_DF[Symbol(freq_count)] = concentrations[:] 

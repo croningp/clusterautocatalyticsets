@@ -146,10 +146,10 @@ function make_MoBlueCRS(k_f::Float64, stable_backward::Float64, dimerization_rat
                 if (f1_cat in all_molecules) && (f1_grow_cat in all_molecules)
                     m1_cat = molecule_dict[f1_cat]
                     p1_cat = molecule_dict[f1_grow_cat]
-                    cat_forward_rxn = Reaction(rID, [monomer_id,m1_cat], [1,1], [p1_cat], [1],[],[], "STD", forward_k)
+                    cat_forward_rxn = Reaction(rID, [monomer_id,m1_cat], [1,1], [p1_cat], [1],[],[], "STD", (mo36_enhance)*forward_k)
                     push!(reaction_list, cat_forward_rxn)
                     rID += 1
-                    cat_backward_rxn = Reaction(rID, [p1_cat],[1],[monomer_id,m1_cat], [1,1],[],[], "STD", 1.0/mo36_enhance)
+                    cat_backward_rxn = Reaction(rID, [p1_cat],[1],[monomer_id,m1_cat], [1,1],[],[], "STD", backward_k)
                     push!(reaction_list, cat_backward_rxn)
                     rID += 1
                 end
@@ -508,12 +508,16 @@ function make_MoBlueCRS(k_f::Float64, stable_backward::Float64, dimerization_rat
     backward_rxn = Reaction(rID, [associated_id], [1], [mo36_id, wheel_id], [1,1],[],[], "STD", 100.0)
     push!(reaction_list, backward_rxn)
     rID += 1
-    associated_id =  molecule_dict["Mo36*Mo6"]
     
-    
+    associated_id =  molecule_dict["Mo36*Mo1"]
+    forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num("Mo1"), count_mo_num("Mo36"))
+    forward_reaction = Reaction(rID, [mo36_id, monomer_id], [1,1], [associated_id], [1], [], [], "STD", mo36_enhance*forward_k)
+    push!(reaction_list, forward_reaction)
+    rID += 1
     ### Build the association Mo6 
     #### Build the dissociation of Mo6 from the Mo36 this reaction goes one way
     penta_id = molecule_dict["Mo6"]
+    associated_id =  molecule_dict["Mo36*Mo6"]
     backward_rxn = Reaction(rID, [associated_id], [1], [mo36_id, penta_id], [1,1],[],[], "STD", 100.0)
     push!(reaction_list, backward_rxn)
     rID += 1
@@ -531,9 +535,33 @@ function make_MoBlueCRS(k_f::Float64, stable_backward::Float64, dimerization_rat
     )
     
     MoBlue_CRS = CRS(all_molecules, molecule_dict, reaction_list, parameters)
-    
+   
+    # for rID in 1:length(MoBlue_CRS.reaction_list)
+    #     rxn = MoBlue_CRS.reaction_list[rID]
+    #     if mo36_id in rxn.reactants
+    #         println(format_reaction_str(MoBlue_CRS, rID))
+    #     elseif mo36_id in rxn.products
+    #         println(format_reaction_str(MoBlue_CRS, rID))
+    #     end
+    # end
     
     return MoBlue_CRS
+end
+function format_reaction_str(CRS, rID)
+    rxn = CRS.reaction_list[rID]
+    react_IDs = rxn.reactants
+    prod_IDs = rxn.products
+    rx_str = ""
+    for r in react_IDs
+        rx_str= rx_str*CRS.molecule_list[r]* " + "
+    end
+    rx_str = rx_str[1:end-2]
+    rx_str = rx_str*"--> "
+    for p in prod_IDs
+        rx_str= rx_str*CRS.molecule_list[p]* " + "
+    end
+    rx_str = rx_str[1:end-2]
+    return rx_str
 end
 
 function count_mo_num(molecule)
@@ -586,7 +614,7 @@ function count_mo_num(molecule)
         
         size = parse(Int64, size)
         n += size
-        else # Otherwise it's a pentamer or smaller
+    else # Otherwise it's a pentamer or smaller
         size = split(molecule, "o")[2]
         if occursin("+", size)
             
