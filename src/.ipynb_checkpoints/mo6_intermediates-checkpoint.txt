@@ -21,3 +21,9 @@ Mo6+2
 hanger*Mo6+2
 Mo6+3
 hanger*Mo6+3
+Mo6*Mo1
+Mo6*Mo2
+Mo6*Mo3
+Mo6*Mo4
+Mo6*Mo5
+Mo6*Mo6

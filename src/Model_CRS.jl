@@ -81,59 +81,6 @@ function bimolecular_coef(k, T, R, V,m1, m2)
     return (k/V)*sqrt(R*T/m)
 end 
 
-function generate_binary_ligation_CRS(max_L, kf, kb, volume::Float64 = 1.0, T::Float64 = 300, R::Float64= 8.3144598, mA::Int64= 100, mB::Int64 = 100)
-    seqs = generate_all_binary_seqs(max_L)
-    ## Generate Molecule List and Dictionary
-    molecule_dict = Dict{String,Int64}()
-    for (n, m) in enumerate(seqs)
-        molecule_dict[m] = n
-    end
-    
-    ## Generate Reaction List
-    Aindex = molecule_dict["A"]
-    Bindex = molecule_dict["B"]
-    
-    ### Generate all forward and backward reactions
-    n_rxn = sum([(i-1)*2^(i +1) for i in 1:max_L  ])
-    rxn_list = Array{Reaction}(undef,n_rxn )
-    rID = 1
-    for s in seqs
-        ## Get all splits of the sequence 
-        left_side, right_side = all_splits(s)
-        for i in 1:length(left_side)
-            ### Forward Reaction
-            ## Check if both sides of sequence are identical 
-            if left_side[i] != right_side[i]
-                reactants = [ molecule_dict[ left_side[i] ], molecule_dict[ right_side[i] ] ]
-                reactant_coef = [1,1]
-            else
-                reactants = [molecule_dict[ left_side[i] ] ]
-                reactant_coef = [2]
-            end
-            
-            products = [ molecule_dict[s] ]
-            product_coef = [1]
-            
-            m_red = calculate_reduced_mass_binary(left_side[i], right_side[i],mA, mB)
-            k = bimolecular_coef(kf, T, R, volume, m_red)
-            
-            forward_rxn = Reaction(rID, reactants, reactant_coef, products, product_coef, Array{Int64}(undef,0), Array{Float64}(undef,0), "STD", k)
-            rxn_list[rID] = forward_rxn
-            rID += 1
-            
-            ## Backward Reaction
-            backward_rxn = Reaction(rID, products, product_coef,reactants, reactant_coef, Array{Int64}(undef,0), Array{Float64}(undef,0), "STD", kb)
-            rxn_list[rID] = backward_rxn
-            rID += 1
-            
-        end
-            
-    end  
-    
-    parameters = Dict(:max_L => max_L, :kf => kf, :kb => kb, :volume => volume, :T => T, :R => R, :mA=> mA, :mB => mB)
-    return(CRS(seqs, molecule_dict, rxn_list, parameters))
-end
-
 function copy_CRS(original_CRS, volume_multiplier)
     reaction_list = similar(original_CRS.reaction_list)
     for rID in 1:length(reaction_list)

@@ -1,4 +1,4 @@
-function make_MoBlueCRS(k_f::Float64, stable_backward::Float64, dimerization_ratio::Float64, mo36_enhance::Float64 = 1.0, wheel_enhancement_multiplier::Float64 = 1.0, ball_growth_multipler::Float64 = 1.0,volume::Float64 = 1.0, T::Float64 = 300.0, R::Float64= 8.3144598, MoMass::Int64= 95)
+function make_MoBlueCRS_brokendown(k_f::Float64, k_d_stable::Float64, dimerization_ratio::Float64, mo6_enhance::Float64 = 1.0, mo36_enhance::Float64 = 1.0, mo154_enhance::Float64 = 1.0, mo132_enhance::Float64 = 1.0,volume::Float64 = 1.0, T::Float64 = 300.0, R::Float64= 8.3144598, MoMass::Int64= 95)
     """
     Arguements:
         k_f - The generic forward reaction constant
@@ -14,521 +14,51 @@ function make_MoBlueCRS(k_f::Float64, stable_backward::Float64, dimerization_rat
     """
     
     ########################################################################################
-    # This is a GIANT FUNCTION! It could be broken down into smaller bits but it is not yet.
     # All of the "physics" of the Mo Blue is contained within this function, it specificies
     # which reactions are allowed, and how the rate constants are assigned. 
     ########################################################################################
     
-    # Stable molecules that won't undergo the reverse reaction
+    ######### Stable molecules that won't undergo the reverse reaction
     stable_molecules = ["Mo1", "Mo2", "edgeMo2", "Mo6", "Mo36","Mo36*(Mo6)14_(Mo2)28_(Mo1)14","(Mo6)14_(Mo2)28_(Mo1)14", "(Mo6)12_(edgeMo2)30"]
-    #stable_backward = 1E-4 
-    # All the fragments of the various assemblies
+    
+    ######### All the fragments of the various assemblies
     penta_fragments = make_penta_fragments()
     wheel_fragments = make_wheel_fragments()
     ball_fragments = make_ball_fragments()
     
-    # Group all the different fragments and make a dictionary to map molecule strings to indicies
+    ######### Group all the different fragments and make a dictionary to map molecule strings to indicies
     all_molecules = Array{String, 1}(undef, 0)
     append!(all_molecules, penta_fragments)
     append!(all_molecules, ["edgeMo2"])
     append!(all_molecules, wheel_fragments)
     append!(all_molecules, ball_fragments)
+    
     molecule_dict = Dict{String,Int64}()
     for (n, m) in enumerate(all_molecules)
         molecule_dict[m] = n
     end
     
-    # Make a set to record all the reactions which have already been made
-    reactants_set = Set()
-    
-    # Keep track of particular stable products
-    monomer_id = molecule_dict["Mo1"]
-    edge_dimer_id = molecule_dict["edgeMo2"]
-    dimer_id = molecule_dict["Mo2"]
-    penta_id = molecule_dict["Mo6"]
-    mo36_id = molecule_dict["Mo36"]
-    
-    # Initialize a reaction list
+    ######## Initialize a reaction list and rxn id number ############
     reaction_list = Array{Reaction,1}(undef,0)
-    # Initialize a reaction id number
     rID = 1
     
-    # Make edgeDimer formation reaction
-    forward_k = bimolecular_coef(dimerization_ratio*k_f,T,R,volume,count_mo_num("Mo1"), count_mo_num("Mo1"))
-    forward_rxn = Reaction(rID, [monomer_id], [2], [edge_dimer_id], [1],[],[], "STD", forward_k)
+    reaction_list = generate_Mo1_Mo8_synthesis_reactions(reaction_list, all_molecules, molecule_dict, k_f, k_d_stable, dimerization_ratio, 0.0, T,R,volume)
+    reaction_list = generate_Mo8_Mo36_synthesis_reactions(reaction_list, all_molecules, molecule_dict, k_f, k_d_stable, T,R,volume)
+    reaction_list = generate_Mo154_synthesis_reactions(reaction_list, all_molecules, molecule_dict, k_f, k_d_stable, mo154_enhance, T, R, volume)
+    reaction_list = generate_Mo132_synthesis_reactions(reaction_list, all_molecules, molecule_dict, k_f, k_d_stable, mo132_enhance, T,R, volume)
+    reaction_list = generate_Mo36_templating_Mo6_synthesis_reactions(reaction_list, all_molecules, molecule_dict, k_f, k_d_stable, mo36_enhance, T,R, volume)
+    reaction_list = generate_Mo6_templating_Mo6_synthesis_reactions(reaction_list, all_molecules, molecule_dict, k_f, k_d_stable, mo6_enhance, T,R,volume)
     
-    #### Add the reaction to the list and increment the rID counter
-    push!(reaction_list, forward_rxn)
-    rID += 1
-    
-    #### Build the reverse reaction based on stability and add it to the list
-    backward_rxn = Reaction(rID, [edge_dimer_id], [1], [monomer_id], [2],[],[], "STD", stable_backward)
-    push!(reaction_list, backward_rxn)
-    rID += 1
-    
-    # First iterate over all the possible pentamer fragment interactions and make reactions between them
-    for f1 in penta_fragments # f1 is a molecule string
-         
-        #### First calculate all the interactions with Monomers, because they need to be handled differently. ####
-        
-        m1 = molecule_dict[f1] # m1 is the index associated with f1
-        # Calculate the reaction constant between f1 and a monomer
-        forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1), count_mo_num("Mo1"))
-        
-        if (!occursin("_", f1) && !occursin("*", f1)) # If the molecule is not a stack and doesn't have a hanger (or template)
-            f1_hanger = add_hanger_penta(f1) #Add a hanger to the molecule
-            if f1_hanger in all_molecules # Check if that generated molecule is valid
-                p1 = molecule_dict[f1_hanger] # Get the index of the molecule
-                #### Generate the forward reaction
-                forward_rxn = Reaction(rID, [m1,monomer_id], [1,1], [p1], [1],[],[], "STD", forward_k)
-                #### Add the reaction to the list and increment the rID counter
-                push!(reaction_list, forward_rxn)
-                rID += 1
-                #### If the molecule is stable the reverse reaction will be VERY Slow (maybe 0?)
-                if f1_hanger in stable_molecules
-                    backward_k = stable_backward
-                else
-                    backward_k = 1.0
-                end
-                #### Build the reverse reaction based on stability and add it to the list
-                backward_rxn = Reaction(rID, [p1], [1], [m1,monomer_id], [1,1],[],[], "STD", backward_k)
-                push!(reaction_list, backward_rxn)
-                rID += 1
-            end
-            
-            f1_add = add_addition_penta(f1) # Try adding a monomer addition to the pentamer and see if it's viable
-            if f1_add in all_molecules
-                p1 = molecule_dict[f1_add] # p1 is the index of that molecule
-                forward_rxn = Reaction(rID, [m1,monomer_id], [1,1], [p1], [1],[],[], "STD", forward_k)
-                #### Add the reaction to the list and increment the rID counter
-                push!(reaction_list, forward_rxn)
-                rID += 1
-                #### If the molecule is stable the reverse reaction will be VERY Slow (maybe 0?)
-                if f1_add in stable_molecules
-                    backward_k = stable_backward
-                else
-                    backward_k = 1.0
-                end
-                #### Build the reverse reaction based on stability and add it to the list
-                backward_rxn = Reaction(rID, [p1], [1], [m1,monomer_id], [1,1],[],[], "STD", backward_k)
-                push!(reaction_list, backward_rxn)
-                rID += 1
-            end
-            
-            f1_grow = add_mo_penta(f1) # try growing the pentamer and see if it's viable
-            if f1_grow in all_molecules
-                p1 = molecule_dict[f1_grow]
-                #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo1"], "   Product: ", f1_grow)
-                if f1 != "Mo1"
-                    forward_rxn = Reaction(rID, [m1,monomer_id], [1,1], [p1], [1],[],[], "STD", forward_k)
-                else
-                    forward_rxn = Reaction(rID, [monomer_id], [2], [p1], [1],[],[], "STD", forward_k)
-                    #println(forward_rxn)
-                end
-                #### Add the reaction to the list and increment the rID counter
-                push!(reaction_list, forward_rxn)
-                rID += 1
-                                
-                #### If the molecule is stable the reverse reaction will be VERY Slow (maybe 0?)
-                if f1_grow in stable_molecules
-                    backward_k = stable_backward
-                else
-                    backward_k = 1.0
-                end
-                #### Build the reverse reaction based on stability and add it to the list
-                backward_rxn = Reaction(rID, [p1], [1], [m1,monomer_id], [1,1],[],[], "STD", backward_k)
-                push!(reaction_list, backward_rxn)
-                rID += 1 
-                
-                f1_cat = "Mo36*"*f1
-                forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1_cat), count_mo_num("Mo1"))
-                f1_grow_cat = "Mo36*"*f1_grow
-                if (f1_cat in all_molecules) && (f1_grow_cat in all_molecules)
-                    m1_cat = molecule_dict[f1_cat]
-                    p1_cat = molecule_dict[f1_grow_cat]
-                    cat_forward_rxn = Reaction(rID, [monomer_id,m1_cat], [1,1], [p1_cat], [1],[],[], "STD", (mo36_enhance)*forward_k)
-                    push!(reaction_list, cat_forward_rxn)
-                    rID += 1
-                    cat_backward_rxn = Reaction(rID, [p1_cat],[1],[monomer_id,m1_cat], [1,1],[],[], "STD", backward_k)
-                    push!(reaction_list, cat_backward_rxn)
-                    rID += 1
-                end
-                
-            end
-            
-        end
-        
-        for f2 in penta_fragments
-            # Get the molecules id numbers
-            if f2 != "Mo1"
-                m2 = molecule_dict[f2]
-
-                ## Set stability of (Mo6+2) vs Mo6
-                # If the two molecules are not a set of reactants that have already been handled (This prevents you from making two reactions for A+B -> C and B+A->C)
-                if !(Set([m1,m2]) in reactants_set)
-                    ## Check if they're pentamer fragements that can be combined
-                    if (!occursin(")_(", f1) && !occursin(")_(", f2) && all([f1,f2] .!= "Mo36" ))
-                        ### Get their product
-                        extra = 0
-                        prod_f, extra = merge_penta_fragments(f1,f2)
-                        ### If that product is allowed to be formed it is in all molecules
-                        if (prod_f in all_molecules && !check_if_stackable(f1,f2))
-                            #### Figure out what the product is and what it's formation reaction coefficient is
-                            p1 = molecule_dict[prod_f]
-                            #println("Reaction Number: ", rID, "     Reactants: ", [f1, f2], "   Product: ", prod_f)
-                            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1), count_mo_num(f2))
-                            if prod_f in stable_molecules
-                                backward_k = stable_backward
-                            else
-                                backward_k = 1.0
-                            end
-                            
-                            if f1 != f2
-                                if extra == 0
-                                    forward_rxn = Reaction(rID, [m1,m2], [1,1], [p1], [1],[],[], "STD", forward_k)
-                                    #### Addthe reaction to the list and increment the rID counter
-                                    push!(reaction_list, forward_rxn)
-                                    rID += 1
-                                  
-                                    #### Build the reverse reaction based on stability and add it to the list
-                                    backward_rxn = Reaction(rID, [p1], [1], [m1,m2], [1,1],[],[], "STD", backward_k)
-                                    push!(reaction_list, backward_rxn)
-                                    rID += 1
-                                else
-                                    forward_rxn = Reaction(rID, [m1,m2], [1,1], [p1, monomer_id], [1, extra],[],[], "STD", forward_k)
-                                    #### Addthe reaction to the list and increment the rID counter
-                                    push!(reaction_list, forward_rxn)
-                                    rID += 1
-                                    # #### Build the reverse reaction based on stability and add it to the list
-                                    # backward_rxn = Reaction(rID, [p1, monomer_id], [1, extra], [m1,m2], [1,1],[],[], "STD", backward_k)
-                                    # push!(reaction_list, backward_rxn)
-                                    # rID += 1
-                                end
-                                
-                            elseif f1 == f2
-                                if extra == 0
-                                    forward_rxn = Reaction(rID, [m1], [2], [p1], [1],[],[], "STD", forward_k)
-                                    push!(reaction_list, forward_rxn)
-                                    rID += 1
-                                    #### Build the reverse reaction based on stability and add it to the list
-                                    backward_rxn = Reaction(rID, [p1], [1], [m1], [2],[],[], "STD", backward_k)
-                                    push!(reaction_list, backward_rxn)
-                                    rID += 1
-                                else
-                                    forward_rxn = Reaction(rID, [m1], [2], [p1, monomer_id], [1, extra],[],[], "STD", forward_k)
-                                    push!(reaction_list, forward_rxn)
-                                    rID += 1
-                                    #### Build the reverse reaction based on stability and add it to the list
-                                    # backward_rxn = Reaction(rID, [p1, monomer_id], [1, extra], [m1], [2],[],[], "STD", backward_k)
-                                    # push!(reaction_list, backward_rxn)
-                                    # rID += 1
-                                end
-                            end
-                            
-                        elseif check_if_stackable(f1,f2)
-                                extra = 0
-                                prod_f,extra = stack(f1,f2)
-                                p1 = molecule_dict[prod_f]
-                                if prod_f in stable_molecules
-                                        backward_k = stable_backward
-                                else
-                                    backward_k = 1.0
-                                end
-                                #println("Reaction Number: ", rID, "     Reactants: ", [f1, f2], "   Product: ", prod_f)
-                                forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1), count_mo_num(f2))
-                                if f1 != f2
-                                    if extra == 0
-                                        forward_rxn = Reaction(rID, [m1,m2], [1,1], [p1], [1],[],[], "STD", forward_k)
-                                        #### Add the reaction to the list and increment the rID counter
-                                        push!(reaction_list, forward_rxn)
-                                        rID += 1 
-                                        #### Build the reverse reaction based on stability and add it to the list
-                                        backward_rxn = Reaction(rID, [p1], [1], [m1,m2], [1,1],[],[], "STD", backward_k)
-                                        push!(reaction_list, backward_rxn)
-                                        rID += 1
-                                    else
-                                        forward_rxn = Reaction(rID, [m1,m2], [1,1], [p1, monomer_id], [1, extra],[],[], "STD", forward_k)
-                                        push!(reaction_list, forward_rxn)
-                                        rID += 1 
-                                        #### Build the reverse reaction based on stability and add it to the list
-                                        # backward_rxn = Reaction(rID, [p1, monomer_id], [1, extra], [m1,m2], [1,1],[],[], "STD", backward_k)
-                                        # push!(reaction_list, backward_rxn)
-                                        # rID += 1
-                                    end
-                                    
-                                elseif f1 == f2
-                                    if extra == 0
-                                        forward_rxn = Reaction(rID, [m1], [2], [p1], [1],[],[], "STD", forward_k)
-                                        #### Add the reaction to the list and increment the rID counter
-                                        push!(reaction_list, forward_rxn)
-                                        rID += 1 
-                                        #### Build the reverse reaction based on stability and add it to the list
-                                        backward_rxn = Reaction(rID, [p1], [1], [m1], [2],[],[], "STD", backward_k)
-                                        push!(reaction_list, backward_rxn)
-                                        rID += 1
-                                    else
-                                        forward_rxn = Reaction(rID, [m1], [2], [p1, monomer_id], [1, extra],[],[], "STD", forward_k)
-                                        push!(reaction_list, forward_rxn)
-                                        rID += 1 
-                                        # #### Build the reverse reaction based on stability and add it to the list
-                                        # backward_rxn = Reaction(rID, [p1, monomer_id], [1, extra], [m1], [2],[],[], "STD", backward_k)
-                                        # push!(reaction_list, backward_rxn)
-                                        # rID += 1
-                                    end
-                                end
-                        end
-                        #### Record which reactants you merged so you don't double count
-                        push!(reactants_set, Set([m1,m2]))
-                    ## Check if they're two stacks that can be merged to form Mo36
-                    elseif ( occursin(")_(",f1) && occursin(")_(", f2) )
-                        ### If the two stacks can be merged and their not already recorded
-                       
-                        merge_able, extra = can_merge_stacks(f1,f2)
-                        if merge_able && !(Set([m1,m2]) in reactants_set)
-                            #### Merged stacks always make Mo36
-                            prod_f = "Mo36"
-                            backward_k = stable_backward
-                            #println("Reaction Number: ", rID, "     Reactants: ", [f1, f2], "   Product: ", prod_f)
-                            #### Make reaction to form Mo36, stable, back rxn is almost non-existent, forward reaction is fast
-                            p1 = molecule_dict[prod_f]
-                            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1), count_mo_num(f2))
-                            if f1 != f2
-                                if extra == 0
-                                    forward_rxn = Reaction(rID, [m1,m2], [1,1], [p1], [1],[],[], "STD", forward_k)
-                                    push!(reaction_list, forward_rxn)
-                                    rID += 1
-                                    backward_rxn = Reaction(rID, [p1], [1], [m1,m2], [1,1],[],[], "STD", backward_k)
-                                    push!(reaction_list, backward_rxn)
-                                    rID += 1
-                                else
-                                    forward_rxn = Reaction(rID, [m1,m2], [1,1], [p1, monomer_id], [1, extra],[],[], "STD", forward_k)
-                                    push!(reaction_list, forward_rxn)
-                                    rID += 1
-                                    # backward_rxn = Reaction(rID, [p1, monomer_id], [1, extra], [m1,m2], [1,1],[],[], "STD", backward_k)
-                                    # push!(reaction_list, backward_rxn)
-                                    # rID += 1
-                                end
-                                    
-                            elseif f1 ==f2
-                                if extra == 0 
-                                    forward_rxn = Reaction(rID, [m1], [2], [p1], [1],[],[], "STD", forward_k)
-                                    push!(reaction_list, forward_rxn)
-                                    rID += 1
-                                    backward_rxn = Reaction(rID, [p1], [1], [m1], [2],[],[], "STD", backward_k)
-                                    push!(reaction_list, backward_rxn)
-                                    rID += 1
-                                else
-                                    forward_rxn = Reaction(rID, [m1], [2], [p1, monomer_id], [1, extra],[],[], "STD", forward_k)
-                                    push!(reaction_list, forward_rxn)
-                                    rID += 1
-                                    # backward_rxn = Reaction(rID, [p1, monomer_id], [1, extra], [m1], [2],[],[], "STD", backward_k)
-                                    # push!(reaction_list, backward_rxn)
-                                    # rID +=1
-                                end
-                            end
-                            push!(reactants_set, Set([m1,m2]))
-                        end
-
-                    ## Check if one is a stack that can add a monomer
-                    elseif f1== "Mo1" && occursin(")_(",f2)
-                        if can_add_monomer_to_stack(f2)
-                            possible_products = add_monomer_to_stack_all(f2)
-                            for p in possible_products
-                                if p in stable_molecules
-                                    backward_k = stable_backward
-                                else
-                                    backward_k = 1.0
-                                end
-                                ## Figure out what the product is an how stable it is
-                                p1 = molecule_dict[p]
-                                #println("Reaction Number: ", rID, "     Reactants: ", [f1, f2], "   Product: ", p)
-                                forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f2), count_mo_num("Mo1"))
-                                forward_rxn = Reaction(rID, [m2,monomer_id], [1,1], [p1], [1],[],[], "STD", forward_k)
-                                push!(reaction_list, forward_rxn)
-                                rID += 1  
-                                backward_rxn = Reaction(rID, [p1], [1], [m2,monomer_id], [1,1],[],[], "STD", backward_k)
-                                push!(reaction_list, backward_rxn)
-                                rID += 1
-                            end
-                            push!(reactants_set, Set([m1,m2]))
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    # Next make all the reactions to assemble the wheel
-    for f1 in wheel_fragments
-        m1 = molecule_dict[f1]
-        # Add a pentamer to this fragment
-        prod_f = add_pent_wheel(f1)
-        # Check if that product is possible and if the reaction hasn't be recorded yet
-        if prod_f in all_molecules && !(Set([m1,penta_id]) in reactants_set)
-            ## Whats the product and record the reaction
-            p1 = molecule_dict[prod_f]
-            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo6"], "   Product: ", prod_f)
-            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1), count_mo_num("Mo6"))
-            forward_rxn = Reaction(rID, [m1,penta_id], [1,1], [p1], [1],[],[], "STD", calculate_wheel_stability(forward_k, wheel_enhancement_multiplier, prod_f))
-            push!(reaction_list, forward_rxn)
-            rID += 1
-
-            if prod_f in stable_molecules
-                backward_k = stable_backward
-            else
-                backward_k = 1.0
-            end
-            
-            backward_rxn = Reaction(rID, [p1], [1], [m1,penta_id], [1,1],[],[], "STD", backward_k)
-            push!(reaction_list, backward_rxn)
-            rID += 1
-            
-            push!(reactants_set, Set([m1, penta_id]))
-        end
-        # A a monomer to the wheel and see if its a possible product that hasn't been recorded yet
-        prod_f = add_monomer_wheel(f1)
-        if prod_f in all_molecules && !(Set([m1,monomer_id]) in reactants_set)
-            
-            p1 = molecule_dict[prod_f]
-            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo1"], "   Product: ", prod_f)
-            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1), count_mo_num("Mo1"))
-            forward_rxn = Reaction(rID, [m1,monomer_id], [1,1], [p1], [1],[],[], "STD", calculate_wheel_stability(forward_k, wheel_enhancement_multiplier, prod_f))
-            push!(reaction_list, forward_rxn)
-            rID += 1
-
-            if prod_f in stable_molecules
-                backward_k = stable_backward
-            else
-                backward_k = 1.0
-            end
-            backward_rxn = Reaction(rID, [p1], [1], [m1,monomer_id], [1,1],[],[], "STD", backward_k)
-            push!(reaction_list, backward_rxn)
-            rID += 1
-            
-            push!(reactants_set, Set([m1, monomer_id]))
-        end
-        # Add a dimer to the wheel fragment and see if it's possible and whether it's been recorded 
-        prod_f = add_dimer_wheel(f1)
-        if prod_f in all_molecules && !(Set([m1,dimer_id]) in reactants_set)
-            p1 = molecule_dict[prod_f]
-            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo2"], "   Product: ", prod_f)
-            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1), count_mo_num("Mo2"))
-            forward_rxn = Reaction(rID, [m1,dimer_id], [1,1], [p1], [1],[],[], "STD", calculate_wheel_stability(forward_k, wheel_enhancement_multiplier, prod_f))
-            push!(reaction_list, forward_rxn)
-            rID += 1
-
-            if prod_f in stable_molecules
-                backward_k = stable_backward
-            else
-                backward_k = 1.0
-            end
-            
-            backward_rxn = Reaction(rID, [p1], [1], [m1,dimer_id], [1,1],[],[], "STD", backward_k)
-            push!(reaction_list, backward_rxn)
-            rID += 1
-            
-            push!(reactants_set, Set([m1, dimer_id]))
-        end
-                
-    end
-    
-    # Repeat for the ball fragments, remember balls are built using edgeMo2 dimers
-    for f1 in ball_fragments
-        m1 = molecule_dict[f1]
-        prod_f = add_pentamer_ball(f1)
-        if prod_f in all_molecules && !(Set([m1,penta_id]) in reactants_set)
-            p1 = molecule_dict[prod_f]
-            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo6"], "   Product: ", prod_f)
-            k_ball_f = calculate_ball_addition_rate(k_f, ball_growth_multipler, f1, "Mo6")
-            forward_k = bimolecular_coef(k_ball_f,T,R,volume,count_mo_num(f1), count_mo_num("Mo6"))
-            forward_rxn = Reaction(rID, [m1,penta_id], [1,1], [p1], [1],[],[], "STD", forward_k)
-            push!(reaction_list, forward_rxn)
-            rID += 1
-
-            if prod_f in stable_molecules
-                backward_k = stable_backward
-            else
-                backward_k = 1.0
-            end
-            backward_rxn = Reaction(rID, [p1], [1], [m1,penta_id], [1,1],[],[], "STD", backward_k)
-            push!(reaction_list, backward_rxn)
-            rID += 1
-            
-            push!(reactants_set, Set([m1, penta_id]))
-        end
-
-        prod_f = add_dimer_ball(f1)
-        if prod_f in all_molecules && !(Set([m1,edge_dimer_id]) in reactants_set)
-            p1 = molecule_dict[prod_f]
-            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "edgeMo2"], "   Product: ", prod_f)
-            k_ball_f = calculate_ball_addition_rate(k_f, ball_growth_multipler, f1, "edgeMo2")
-            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(f1), count_mo_num("edgeMo2"))
-            forward_rxn = Reaction(rID, [m1,edge_dimer_id], [1,1], [p1], [1],[],[], "STD", forward_k)
-            push!(reaction_list, forward_rxn)
-            rID += 1
-
-            if prod_f in stable_molecules
-                backward_k = stable_backward
-            else
-                backward_k = 1.0
-            end
-            backward_rxn = Reaction(rID, [p1], [1], [m1,edge_dimer_id], [1,1],[],[], "STD", backward_k)
-            push!(reaction_list, backward_rxn)
-            rID += 1
-            push!(reactants_set, Set([m1, edge_dimer_id]))
-        end           
-    end
-    
-    #### Build the association of Mo36 and a pentamer
-    prod_f = "Mo36*(Mo6)1_(Mo2)0_(Mo1)0"
-    p = molecule_dict[prod_f]
-    forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num("Mo6"), count_mo_num("Mo36"))
-    forward_reaction = Reaction(rID, [mo36_id, penta_id], [1,1], [p], [1], [], [], "STD", forward_k)
-    push!(reaction_list, forward_reaction)
-    rID += 1
-    backward_reaction = Reaction(rID, [p], [1], [mo36_id, penta_id], [1,1], [], [], "STD", 1.0)
-    push!(reaction_list, backward_rxn)
-    rID += 1
-    
-    ### Build the association of pentamer and edgeMo2
-    prod_f = build_ball_frag(1,1)
-    p = molecule_dict[prod_f]
-    forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num("Mo6"), count_mo_num("edgeMo2"))
-    forward_reaction = Reaction(rID, [edge_dimer_id, penta_id], [1,1], [p], [1], [], [], "STD", forward_k)
-    push!(reaction_list, forward_reaction)
-    rID += 1
-    backward_reaction = Reaction(rID, [p], [1], [edge_dimer_id, penta_id], [1,1], [], [], "STD", 1.0)
-    push!(reaction_list, backward_rxn)
-    rID += 1
-    
-    #### Build the dissociation of Mo36 from the wheel this reaction goes one way
-    associated_id =  molecule_dict["Mo36*(Mo6)14_(Mo2)28_(Mo1)14"]
-    
-    wheel_id = molecule_dict["(Mo6)14_(Mo2)28_(Mo1)14"]
-    backward_rxn = Reaction(rID, [associated_id], [1], [mo36_id, wheel_id], [1,1],[],[], "STD", 100.0)
-    push!(reaction_list, backward_rxn)
-    rID += 1
-    
-    associated_id =  molecule_dict["Mo36*Mo1"]
-    forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num("Mo1"), count_mo_num("Mo36"))
-    forward_reaction = Reaction(rID, [mo36_id, monomer_id], [1,1], [associated_id], [1], [], [], "STD", mo36_enhance*forward_k)
-    push!(reaction_list, forward_reaction)
-    rID += 1
-    ### Build the association Mo6 
-    #### Build the dissociation of Mo6 from the Mo36 this reaction goes one way
-    penta_id = molecule_dict["Mo6"]
-    associated_id =  molecule_dict["Mo36*Mo6"]
-    backward_rxn = Reaction(rID, [associated_id], [1], [mo36_id, penta_id], [1,1],[],[], "STD", 100.0)
-    push!(reaction_list, backward_rxn)
-    rID += 1
+    reaction_list = remove_duplicate_reactants(reaction_list)
     
     parameters = Dict(
     :k_f => k_f,
-    :stable_backward=> stable_backward,
+    :stable_backward=> k_d_stable,
     :dimerization_ratio => dimerization_ratio,
+    :mo6_enhance => mo6_enhance,
     :mo36_enhance => mo36_enhance,
-    :wheel_enhancement_multiplier => wheel_enhancement_multiplier,
-    :ball_enhance => ball_growth_multipler,
+    :mo154_enhance => mo154_enhance,
+    :mo132_enhance => mo132_enhance,
     :volume => volume,
     :T => T,
     :R => R
@@ -536,17 +66,24 @@ function make_MoBlueCRS(k_f::Float64, stable_backward::Float64, dimerization_rat
     
     MoBlue_CRS = CRS(all_molecules, molecule_dict, reaction_list, parameters)
    
-    # for rID in 1:length(MoBlue_CRS.reaction_list)
-    #     rxn = MoBlue_CRS.reaction_list[rID]
-    #     if mo36_id in rxn.reactants
-    #         println(format_reaction_str(MoBlue_CRS, rID))
-    #     elseif mo36_id in rxn.products
-    #         println(format_reaction_str(MoBlue_CRS, rID))
-    #     end
-    # end
+    for rID in 1:length(MoBlue_CRS.reaction_list)
+        rxn = MoBlue_CRS.reaction_list[rID]
+        if length(rxn.reactants) != length(rxn.react_coef)
+            println(format_reaction_str(MoBlue_CRS, rID))
+            println("Reactant's dont match, RXN ID: ",rID)
+            println(rxn.reactants, ", ", rxn.react_coef)
+        elseif length(rxn.products) != length(rxn.prod_coef)
+            println(format_reaction_str(MoBlue_CRS, rID))
+            println("Products's dont match, RXN ID: ",rID)
+            println(rxn.reactants, ", ", rxn.react_coef)
+        end
+    end
     
     return MoBlue_CRS
 end
+####################################################################
+### Helper functions to build the Chemical Reaction System       ###
+####################################################################
 function format_reaction_str(CRS, rID)
     rxn = CRS.reaction_list[rID]
     react_IDs = rxn.reactants
@@ -601,6 +138,8 @@ function count_mo_num(molecule)
         molecule = split(molecule, "*")[2]
         if occursin("hanger", addition) #Its got a hanger
             n +=1
+        elseif occursin("Mo6", addition) #It's templating 
+            n += 6
         elseif occursin("Mo36", addition) #It's templating 
             n += 36
         end
@@ -628,7 +167,69 @@ function count_mo_num(molecule)
         
     return n 
 end
+##############################################################################################################
+function generate_Mo132_synthesis_reactions(reaction_list, molecule_list, molecule_dict, k_f, k_d_stable, mo132_enhance, T,R, volume)
+    rID = length(reaction_list) + 1
+    edgeMo2_id= molecule_dict["edgeMo2"]
+    Mo6_id = molecule_dict["Mo6"]
+    ball_frags = molecule_list[occursin.("_(edgeMo2", molecule_list)]
+    
+    ## Make association between pentamer and edgeMo2
+    bonded_id = molecule_dict["(Mo6)1_(edgeMo2)1"]
+    forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num("edgeMo2"), count_mo_num("Mo6"))
+    forward_rxn = Reaction(rID, [edgeMo2_id,Mo6_id], [1,1], [bonded_id], [1],[],[], "STD", forward_k)
+    push!(reaction_list, forward_rxn)
+    rID += 1
+    backward_k = 1.0 # intermediates are always unstable
+    backward_rxn = Reaction(rID, [bonded_id], [1], [edgeMo2_id,Mo6_id], [1,1],[],[], "STD", backward_k)
+    push!(reaction_list, backward_rxn)
+    rID += 1
+    
+    for r1 in ball_frags
+        r1_id = molecule_dict[r1]
+        p = add_pentamer_ball(r1)
+        
+        if p in ball_frags
+            p_id = molecule_dict[p]
+            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo6"], "   Product: ", prod_f)
+            k_ball_f = calculate_ball_addition_rate(k_f, mo132_enhance, r1, "Mo6")
+            forward_k = bimolecular_coef(k_ball_f,T,R,volume,count_mo_num(r1), count_mo_num("Mo6"))
+            if p == "(Mo6)12_(edgeMo2)30"
+                backward_k = k_d_stable
+            else
+                backward_k = 1.0
+            end
+            forward_rxn = Reaction(rID, [r1_id,Mo6_id], [1,1], [p_id], [1],[],[], "STD", forward_k)
+            push!(reaction_list, forward_rxn)
+            rID += 1
+            backward_rxn = Reaction(rID, [p_id], [1], [r1_id,Mo6_id], [1,1],[],[], "STD", backward_k)
+            push!(reaction_list, backward_rxn)
+            rID += 1   
+        end
 
+        p2 = add_dimer_ball(r1)
+        if p2 in ball_frags
+            p2_id = molecule_dict[p2]
+            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "edgeMo2"], "   Product: ", prod_f)
+            k_ball_f = calculate_ball_addition_rate(k_f, mo132_enhance, r1, "edgeMo2")
+            forward_k = bimolecular_coef(k_ball_f,T,R,volume,count_mo_num(r1), count_mo_num("edgeMo2"))
+            if p == "(Mo6)12_(edgeMo2)30"
+                backward_k = k_d_stable
+            else
+                backward_k = 1.0
+            end
+            forward_rxn = Reaction(rID, [r1_id,edgeMo2_id], [1,1], [p2_id], [1],[],[], "STD", forward_k)
+            push!(reaction_list, forward_rxn)
+            rID += 1
+            backward_rxn = Reaction(rID, [p2_id], [1], [r1_id,edgeMo2_id], [1,1],[],[], "STD", backward_k)
+            push!(reaction_list, backward_rxn)
+            rID += 1
+        end           
+    end
+
+   return reaction_list
+end
+##############################################################################################################
 function count_ball_components(m)
     """
     Counts the components of MoBlue Keggin "Balls" and fragments of balls
@@ -713,7 +314,115 @@ function make_ball_fragments()
     end
     return ball_fragments
 end
-
+##############################################################################################################
+function generate_Mo154_synthesis_reactions(reaction_list, molecule_list, molecule_dict, k_f, k_d_stable, mo154_enhance, T,R, volume)
+    rID = length(reaction_list) + 1
+    Mo2_id= molecule_dict["Mo2"]
+    Mo1_id = molecule_dict["Mo1"]
+    Mo6_id = molecule_dict["Mo6"]
+    wheel_frags = molecule_list[occursin.("Mo36*(Mo6)", molecule_list)]
+    #####################################################################################
+    ####### Make the initial association reactions and dissociate Mo36 at the end #######
+    r1 = "Mo36"
+    r2 = "Mo6"
+    r1_id = molecule_dict["Mo36"]
+    r2_id = Mo6_id
+    p1 = "Mo36*(Mo6)1_(Mo2)0_(Mo1)0"
+    p1_id = molecule_dict[p1]
+    k_f_wheel = calculate_wheel_stability(k_f, mo154_enhance, p1)
+    forward_k = bimolecular_coef(k_f_wheel,T,R,volume,count_mo_num(r1), count_mo_num(r2))
+    backward_k = 1.0
+    forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p1_id], [1],[],[], "STD", forward_k)
+    push!(reaction_list, forward_rxn)
+    rID += 1
+    backward_rxn = Reaction(rID, [p1_id], [1], [r1_id,r2_id], [1,1],[],[], "STD", backward_k)
+    push!(reaction_list, backward_rxn)
+    rID += 1
+    # Dissociate Quickly
+    r1 = "Mo36*(Mo6)14_(Mo2)28_(Mo1)14"
+    r1_id = molecule_dict[r1]
+    p1 = "Mo36"
+    p1_id = molecule_dict[p1]
+    p2 = "(Mo6)14_(Mo2)28_(Mo1)14"
+    p2_id = molecule_dict[p2]
+    forward_k = 1000.0
+    forward_rxn = Reaction(rID, [r1_id], [1], [p1_id, p2_id], [1, 1],[],[], "STD", forward_k)
+    push!(reaction_list, forward_rxn)
+    rID += 1
+    
+    # Next make all the reactions to assemble the wheel
+    for r1 in wheel_frags
+        r1_id = molecule_dict[r1]
+        # Add a pentamer to this fragment
+        p1 = add_pent_wheel(r1)
+        # Check if that product is possible 
+        if p1 in molecule_list 
+            # Whats the product and record the reaction
+            p1_id = molecule_dict[p1]
+            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo6"], "   Product: ", prod_f)
+            k_f_wheel = calculate_wheel_stability(k_f, mo154_enhance, p1)
+            forward_k = bimolecular_coef(k_f_wheel,T,R,volume,count_mo_num(r1), count_mo_num("Mo6"))
+            if p1 == "Mo36*(Mo6)14_(Mo2)28_(Mo1)14"
+                backward_k = k_d_stable
+            else
+                backward_k = 1.0
+            end
+            
+            forward_rxn = Reaction(rID, [r1_id,Mo6_id], [1,1], [p1_id], [1],[],[], "STD", forward_k)
+            push!(reaction_list, forward_rxn)
+            rID += 1
+            backward_rxn = Reaction(rID, [p1_id], [1], [r1_id,Mo6_id], [1,1],[],[], "STD", backward_k)
+            push!(reaction_list, backward_rxn)
+            rID += 1
+        end
+        # A a monomer to the wheel and see if its a possible product that hasn't been recorded yet
+        p2 = add_monomer_wheel(r1)
+        # Check if that product is possible 
+        if p2 in molecule_list 
+            # Whats the product and record the reaction
+            p2_id = molecule_dict[p2]
+            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo6"], "   Product: ", prod_f)
+            k_f_wheel = calculate_wheel_stability(k_f, mo154_enhance, p2)
+            forward_k = bimolecular_coef(k_f_wheel,T,R,volume,count_mo_num(r1), count_mo_num("Mo1"))
+            if p1 == "Mo36*(Mo6)14_(Mo2)28_(Mo1)14"
+                backward_k = k_d_stable
+            else
+                backward_k = 1.0
+            end
+            
+            forward_rxn = Reaction(rID, [r1_id,Mo1_id], [1,1], [p2_id], [1],[],[], "STD", forward_k)
+            push!(reaction_list, forward_rxn)
+            rID += 1
+            backward_rxn = Reaction(rID, [p2_id], [1], [r1_id,Mo1_id], [1,1],[],[], "STD", backward_k)
+            push!(reaction_list, backward_rxn)
+            rID += 1
+        end
+        # Add a dimer to the wheel fragment and see if it's possible and whether it's been recorded 
+        p3 = add_dimer_wheel(r1)
+        # Check if that product is possible 
+        if p3 in molecule_list 
+            # Whats the product and record the reaction
+            p3_id = molecule_dict[p3]
+            #println("Reaction Number: ", rID, "     Reactants: ", [f1, "Mo6"], "   Product: ", prod_f)
+            k_f_wheel = calculate_wheel_stability(k_f, mo154_enhance, p3)
+            forward_k = bimolecular_coef(k_f_wheel,T,R,volume,count_mo_num(r1), count_mo_num("Mo2"))
+            if p1 == "Mo36*(Mo6)14_(Mo2)28_(Mo1)14"
+                backward_k = k_d_stable
+            else
+                backward_k = 1.0
+            end
+            
+            forward_rxn = Reaction(rID, [r1_id,Mo2_id], [1,1], [p3_id], [1],[],[], "STD", forward_k)
+            push!(reaction_list, forward_rxn)
+            rID += 1
+            backward_rxn = Reaction(rID, [p3_id], [1], [r1_id,Mo2_id], [1,1],[],[], "STD", backward_k)
+            push!(reaction_list, backward_rxn)
+            rID += 1
+        end
+    end
+    return reaction_list
+end
+##############################################################################################################
 function build_wheel_frag(n_pent, n_dimer, n_monomer)
     """ Make a wheel molecule string with the given component counts """
     frag = "Mo36*(Mo6)"*string(n_pent)*"_(Mo2)"*string(n_dimer)*"_(Mo1)"*string(n_monomer)
@@ -780,7 +489,309 @@ function make_wheel_fragments()
     push!(frags, mo_assembled)
     return frags 
 end
-
+##############################################################################################################
+function generate_Mo128_synthesis_reactions(reactions, molecule_list, molecule_dict, k_f, k_d, Mo128_enhance)
+    
+    return reactions, molecules 
+end
+##############################################################################################################
+##############################################################################################################
+function generate_Mo1_Mo8_synthesis_reactions(reaction_list, molecule_list, molecule_dict, k_f, k_d_stable, dimerization_ratio, trimer_stability, T,R,volume)
+    #############################################################
+    ############ YOU HAVEN"T ADDED TRIMER STABILITY! ############
+    #############################################################
+    
+    # Initialize some values
+    rID = length(reaction_list) +1
+    monomer_id = molecule_dict["Mo1"]
+    molecule_sizes = count_mo_num.(molecule_list)
+    # Get all the possible molecules between Mo1 to hanger*Mo6+3 (Mo10) exclude aggregates like (Mo6)1_(Mo2)1
+    stable_molecules= ["Mo1", "Mo2", "edgeMo2", "Mo6"]
+    relevant_molecules = molecule_list[molecule_sizes .<= 10]
+    relevant_molecules = relevant_molecules[.!occursin.("_", relevant_molecules)]
+    relevant_molecules = relevant_molecules[.!occursin.("Mo6*", relevant_molecules)]
+    relevant_molecules = relevant_molecules[relevant_molecules .!= "edgeMo2"]
+    ####################################################
+    ##### Handle the formation of edgeMo2 manually #####
+    r1 = "Mo1"
+    r1_id = molecule_dict[r1]
+    p1 = "edgeMo2"
+    p1_id = molecule_dict[p1]
+    forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(r1), count_mo_num(r1))  
+    backward_k = k_d_stable 
+    forward_rxn = Reaction(rID, [r1_id], [2], [p1_id], [1],[],[], "STD", dimerization_ratio*forward_k)
+    push!(reaction_list, forward_rxn)
+    rID += 1
+    backward_rxn = Reaction(rID, [p1_id], [1], [r1_id], [2],[],[], "STD", backward_k)
+    push!(reaction_list, backward_rxn)
+    rID += 1
+    ###################################################################
+    ##### Check all pairwise interactions between these molecules #####
+    n = length(relevant_molecules)
+    for i in 1:n, j in i:n
+        r1 = relevant_molecules[i]
+        r2 = relevant_molecules[j]
+        p, extra_mo1 = merge_penta_fragments(r1,r2)
+        if p in relevant_molecules
+            # Get the IDs of the relevant molecules
+            r1_id = molecule_dict[r1]
+            r2_id = molecule_dict[r2]
+            p_id = molecule_dict[p]
+            # Calculate the forward and backward reaction rate constant
+            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(r1), count_mo_num(r2))
+            if p in stable_molecules
+                backward_k = k_d_stable
+            else
+                backward_k = 1.0
+            end
+            if extra_mo1 == 0 # If the reaction doesn't have extra Mo1 produced include the reverse reaction
+                if r1 != r2
+                    forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id], [1],[],[], "STD", forward_k)
+                    push!(reaction_list, forward_rxn)
+                    rID += 1
+                    backward_rxn = Reaction(rID, [p_id], [1], [r1_id,r2_id], [1,1],[],[], "STD", backward_k)
+                    push!(reaction_list, backward_rxn)
+                    rID += 1
+                elseif r1 == r2
+                    forward_rxn = Reaction(rID, [r1_id], [2], [p_id], [1],[],[], "STD", forward_k)
+                    push!(reaction_list, forward_rxn)
+                    rID += 1
+                    backward_rxn = Reaction(rID, [p_id], [1], [r1_id], [2],[],[], "STD", backward_k)
+                    push!(reaction_list, backward_rxn)
+                    rID += 1
+                end
+            else #If the reaction makes extra Mo1 you don't add the reverse reaction since it's already included in the above step 
+                if r1 != r2
+                    forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id, monomer_id], [1, extra_mo1],[],[], "STD", forward_k)
+                    push!(reaction_list, forward_rxn)
+                    rID += 1
+                elseif r1 == r2
+                    forward_rxn = Reaction(rID, [r1_id], [2], [p_id, monomer_id], [1, extra_mo1],[],[], "STD", forward_k)
+                    push!(reaction_list, forward_rxn)
+                    rID += 1
+                end
+            end
+        end
+    end
+    return reaction_list 
+end
+##############################################################################################################
+##############################################################################################################
+function generate_Mo3_Mo12_synthesis_reactions(reaction_list, molecule_list, molecule_dict, k_f, k_d, Mo3_template_effect)
+    
+    
+    return reactions, molecules 
+end
+##############################################################################################################
+##############################################################################################################
+function generate_Mo8_Mo36_synthesis_reactions(reaction_list, molecule_list, molecule_dict, k_f, k_d_stable, T,R,volume)
+    rID = length(reaction_list) +1 
+    monomer_id = molecule_dict["Mo1"]
+    molecule_sizes = count_mo_num.(molecule_list)
+    relevant_molecules = molecule_list[molecule_sizes .< 36]
+    relevant_molecules = relevant_molecules[relevant_molecules .!= "edgeMo2"]
+    ####################################################
+    #### Generate Stacks from pentamer combinations #### 
+    pentamers = relevant_molecules[.!occursin.("_(", relevant_molecules)]
+    pentamers = pentamers[.!occursin.("Mo6*", pentamers)]
+    np = length(pentamers)
+    for i in 1:np, j in i:np
+        r1 = pentamers[i]
+        r2 = pentamers[j]
+        if check_if_stackable(r1,r2)
+            #### Forward and backward reactions
+            p, extra_mo1 = stack(r1,r2)
+            r1_id = molecule_dict[r1]
+            r2_id = molecule_dict[r2]
+            p_id = molecule_dict[p]
+            
+            # Calculate the forward and backward reaction rate constant
+            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(r1), count_mo_num(r2))
+            backward_k = 1.0 # Stacks are never stable 
+            
+            if extra_mo1 == 0 # If the reaction doesn't have extra Mo1 produced include the reverse reaction
+                forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id], [1],[],[], "STD", forward_k)
+                push!(reaction_list, forward_rxn)
+                rID += 1
+                backward_rxn = Reaction(rID, [p_id], [1], [r1_id,r2_id], [1,1],[],[], "STD", backward_k)
+                push!(reaction_list, backward_rxn)
+                rID += 1
+            else #If the reaction makes extra Mo1 you don't add the reverse reaction since it's already included in the above step 
+                forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id, monomer_id], [1, extra_mo1],[],[], "STD", forward_k)
+                push!(reaction_list, forward_rxn)
+                rID += 1
+            end
+        end
+    end
+    ###############################################
+    ####### Generate Mo36 by merging stacks #######
+    stacks = relevant_molecules[occursin.(")_(", relevant_molecules)]
+    # println(stacks)
+    ns = length(stacks)
+    for i in 1:ns
+        r1 = stacks[i]
+        
+        #### Try adding monomer to stack ####
+        possible_additions = add_monomer_to_stack_all(r1)
+        if length(possible_additions)> 0
+            r2 = "Mo1"
+            r2_id = molecule_dict["Mo1"]
+            r1_id = molecule_dict[r1]
+            for p in possible_additions
+                p_id = molecule_dict[p]
+                forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(r1), count_mo_num(r2))
+                backward_k = 1.0 # Stacks are never stable 
+                forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id], [1],[],[], "STD", forward_k)
+                push!(reaction_list, forward_rxn)
+                rID += 1
+                backward_rxn = Reaction(rID, [p_id], [1], [r1_id,r2_id], [1,1],[],[], "STD", backward_k)
+                push!(reaction_list, backward_rxn)
+            end
+        end
+    end
+    for i in 1:ns, j in i:ns
+        #### Check stack combinations ####
+        r1 = stacks[i]
+        r2 = stacks[j]
+        # println(i," , ", j)
+        # println(stacks[i]," , ", stacks[j])
+        # println(r1," , ", r2)
+        stack_possible, extra_mo1 = can_merge_stacks(r1,r2)
+        if stack_possible
+            #### Forward and backward reactions
+            r1_id = molecule_dict[r1]
+            r2_id = molecule_dict[r2]
+            p = "Mo36"
+            p_id = molecule_dict["Mo36"] 
+            # Calculate the forward and backward reaction rate constant
+            forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(r1), count_mo_num(r2))
+            backward_k = k_d_stable # Mo36 is always stable
+            
+            if extra_mo1 == 0 # If the reaction doesn't have extra Mo1 produced include the reverse reaction
+                forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id], [1],[],[], "STD", forward_k)
+                push!(reaction_list, forward_rxn)
+                rID += 1
+                backward_rxn = Reaction(rID, [p_id], [1], [r1_id,r2_id], [1,1],[],[], "STD", backward_k)
+                push!(reaction_list, backward_rxn)
+                rID += 1
+            else #If the reaction makes extra Mo1 you don't add the reverse reaction since it's already included in the above step 
+                forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id, monomer_id], [1, extra_mo1],[],[], "STD", forward_k)
+                push!(reaction_list, forward_rxn)
+                rID += 1
+            end
+        end
+    end
+    return reaction_list
+end
+##############################################################################################################
+function generate_Mo6_templating_Mo6_synthesis_reactions(reaction_list, molecule_list, molecule_dict, k_f, k_d_stable, Mo6_enhance,T,R, volume)
+    rID = length(reaction_list)+1
+    Mo6_id = molecule_dict["Mo6"]
+    monomer_id = molecule_dict["Mo1"]
+    relevant_molecules = ["Mo1","Mo2", "Mo3", "Mo4","Mo5"]
+    
+    ### Generate all attachement reactions (very slow detachement)
+    nm = length(relevant_molecules)
+    for i in 1:nm
+        r1 = relevant_molecules[i]
+        r2 = "Mo6"
+        p = "Mo6*"*r1
+        
+        r1_id = molecule_dict[r1]
+        r2_id = molecule_dict[r2]
+        p_id = molecule_dict[p]
+        
+        forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(r1), count_mo_num(r2))
+        backward_k = 1.0
+        forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id], [1],[],[], "STD", Mo6_enhance*forward_k)
+        push!(reaction_list, forward_rxn)
+        rID += 1
+        backward_rxn = Reaction(rID, [p_id], [1], [r1_id,r2_id], [1,1],[],[], "STD", backward_k)
+        push!(reaction_list, backward_rxn)
+        rID += 1
+        ### Generate all forward reactions (basically polymerization), no backward reactions
+        p2 = "Mo6*"*add_mo_penta(r1)
+        p2_id = molecule_dict[p2]
+        forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(p), count_mo_num("Mo1"))
+        forward_rxn = Reaction(rID, [p_id,monomer_id], [1,1], [p2_id], [1],[],[], "STD", Mo6_enhance*forward_k)
+        push!(reaction_list, forward_rxn)
+        rID += 1
+    end
+    ### Dissociate Mo6*Mo6 quickly
+    r1 = "Mo6*Mo6"
+    r1_id = molecule_dict[r1]
+    p1 = "Mo6"
+    p1_id = molecule_dict[p1]
+    backward_k = 1.0
+    backward_rxn = Reaction(rID, [r1_id], [1], [p1_id], [2],[],[], "STD", 1000*backward_k)
+    push!(reaction_list, backward_rxn)
+    rID += 1
+    
+    return reaction_list 
+end
+##############################################################################################################
+function generate_Mo36_templating_Mo6_synthesis_reactions(reaction_list, molecule_list, molecule_dict, k_f, k_d_stable, Mo36_enhance, T,R,volume)
+    rID = length(reaction_list)+1
+    Mo36_id = molecule_dict["Mo36"]
+    monomer_id = molecule_dict["Mo1"]
+    
+    relevant_molecules = ["Mo1","Mo2", "Mo3", "Mo4","Mo5"]
+    ### Generate all attachement reactions (very slow detachement)
+    nm = length(relevant_molecules)
+    for i in 1:nm
+        r1 = relevant_molecules[i]
+        r2 = "Mo36"
+        p = "Mo36*"*r1
+        
+        r1_id = molecule_dict[r1]
+        r2_id = molecule_dict[r2]
+        p_id = molecule_dict[p]
+      
+        forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(r1), count_mo_num(r2))
+        backward_k = 1.0 
+        forward_rxn = Reaction(rID, [r1_id,r2_id], [1,1], [p_id], [1],[],[], "STD", Mo36_enhance*forward_k)
+        push!(reaction_list, forward_rxn)
+        rID += 1
+        backward_rxn = Reaction(rID, [p_id], [1], [r1_id,r2_id], [1,1],[],[], "STD", backward_k)
+        push!(reaction_list, backward_rxn)
+        rID += 1
+        ### Generate all forward reactions (basically polymerization), no backward reactions
+        p2 = "Mo36*"*add_mo_penta(r1)
+        p2_id = molecule_dict[p2]
+        forward_k = bimolecular_coef(k_f,T,R,volume,count_mo_num(p), count_mo_num("Mo1"))
+        forward_rxn = Reaction(rID, [p_id,monomer_id], [1,1], [p2_id], [1],[],[], "STD", Mo36_enhance*forward_k)
+        push!(reaction_list, forward_rxn)
+        rID += 1
+    end
+    ### Dissociate Mo36*Mo6 quickly
+    r1 = "Mo36*Mo6"
+    r1_id = molecule_dict[r1]
+    p1 = "Mo36"
+    p1_id = molecule_dict[p1]
+    p2 = "Mo6"
+    p2_id = molecule_dict[p2]
+    backward_rxn = Reaction(rID, [r1_id], [1], [p1_id, p2_id], [1,1],[],[], "STD", 1000*1.0)
+    push!(reaction_list, backward_rxn)
+    rID += 1
+    
+    return reaction_list 
+end
+##############################################################################################################
+function remove_duplicate_reactants(reaction_list)
+    nr = length(reaction_list)
+    for i in 1:nr
+        rxn = reaction_list[i]
+        reactants = rxn.reactants
+        if length(reactants)> 1
+            if reactants[1] == reactants[2]
+                new_reaction = Reaction(rxn.index, [reactants[1]], [2], rxn.products, rxn.prod_coef, rxn.catalysts, rxn.cat_coef, rxn.propensity, rxn.rate_constant)
+                reaction_list[i] = new_reaction
+            end
+        end
+    end
+    return reaction_list
+end
+##############################################################################################################
 function build_penta_fragment(core,additions,hanger)
     """Build a pentamer fragment with the listed number of mo """
     m ="NULL"
@@ -794,7 +805,7 @@ function build_penta_fragment(core,additions,hanger)
         return m
     elseif (core <4 && additions >=2)
         return m
-    elseif (core <5 && additions >=3)
+    elseif (core <6 && additions >=3)
         return m
     else
         m = "Mo"*string(core)
@@ -852,13 +863,20 @@ end
 
 function merge_penta_fragments(m1,m2)
     """ Merge two pentamer fragments and see if there are extra monomers produced """
+    ##################################################################################
+    # Pentamer fragments can merge if either have a core of less than 6 (we assume the 
+    # stability of the Mo6 pentamer prevents it), but an Mo6 might pick up hangers and
+    # extras from the fragments
+    ##################################################################################
     extra = 0 # extra monomers
     m_new = "NULL"
-    
     mo1,add1,hanger1 = count_components_penta(m1)
     mo2,add2,hanger2 = count_components_penta(m2)
     mo_sum = sum([mo1, add1, hanger1, mo2, add2, hanger2])
-    if mo_sum >= 10
+    if mo1 ==6 && mo2== 6
+        m_new = "NULL"
+        extra = 0
+    elseif mo_sum >= 10
         extra = mo_sum -10 
         m_new = build_penta_fragment(6, 3, 1)
     else 
@@ -893,10 +911,11 @@ end
 function make_penta_fragments()
     """ Generate all possible pentamer fragments based on rules """
     frags = Array{String,1}(undef, 0)
-    
     for i in 1:6
         ## Add catalyst assemblies 
         cataylzed_frag = "Mo36*"*build_penta_fragment(i,0,0)
+        push!(frags,cataylzed_frag)
+        cataylzed_frag = "Mo6*"*build_penta_fragment(i,0,0)
         push!(frags,cataylzed_frag)
         for j in 0:3
             m1 = build_penta_fragment(i,j, 0)
@@ -960,7 +979,6 @@ function can_add_monomer_to_stack(m)
     """See if a monomer can be added to a stack in any way """
     possible =false
     left,right  = split(m, ")_(")
-    
     if occursin("+", left)
         left = split(left, "+")[2]
         left_adds = parse(Int64,split(left, ")")[1])
@@ -986,7 +1004,6 @@ function can_remove_monomer_from_stack(m)
     """ See if a monomer can come off a stack""" 
     possible =false
     left,right  = split(m, ")_(")
-    
     if occursin("+", left)
         left = split(left, "+")[2]
         left_adds = parse(Int64,split(left, ")")[1])
@@ -1011,13 +1028,11 @@ end
 function add_monomer_to_stack_all(m)
     """ Add monomer to stack, check all possible outcomes """
     all_possible = Array{String,1}(undef,0)
-    
     left,right  = split(m, ")_(")
     left = split(left, "(")[2]
     right = split(right, ")")[1]
     core_left,add_left,hanger = count_components_penta(left)
     core_right,add_right,hanger = count_components_penta(right)
-    
     new_left = build_penta_fragment(core_left, add_left + 1, 1)
     if new_left != "NULL"
         push!(all_possible,stack(new_left, right)[1])
@@ -1026,7 +1041,6 @@ function add_monomer_to_stack_all(m)
     if new_right !="NULL"
         push!(all_possible,stack(left,new_right)[1])
     end
-    
     return all_possible
 end
 
@@ -1059,13 +1073,13 @@ function can_merge_stacks(m1,m2)
     else
         right2_adds = 0
     end
-    
     if sum([left1_adds, left2_adds, right1_adds, right2_adds]) >= 10
         if all([left1_adds, left2_adds, right1_adds, right2_adds] .> 1)
             possible = true
             extra = sum([left1_adds, left2_adds, right1_adds, right2_adds]) - 10
         end
     end
-        
     return possible, extra 
 end
+
+

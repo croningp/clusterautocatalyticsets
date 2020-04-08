@@ -3,12 +3,12 @@
 #############################################
 ###### Dependencies #########################
 #############################################
-using Random
+# using Random
 
-using DataFrames
-using JSON
-using CSV
-using Combinatorics
+# using DataFrames
+# using JSON
+# using CSV
+# using Combinatorics
 
 include("Data.jl")
 include("Model_CRS.jl")
@@ -55,6 +55,8 @@ end
 function ExecuteReaction(concentrations::Array{Float64,1}, CRS::CRS, rID::Int64)
     ########## NOT UNIT TESTED! ##########
     rxn = CRS.reaction_list[rID]
+    # println(rxn.reactants, ", ",rxn.products)
+    # println(rxn.react_coef, ", ",rxn.prod_coef)
     for (i, r) in enumerate(rxn.reactants)
         concentrations[r] -= rxn.react_coef[i]
     end
@@ -107,77 +109,10 @@ end
 # end
 
 #############################################
-##### Stochastic Evolution Functions ########
+##### Stochastic Evolution Function ########
 #############################################
-
- 
-function Run_Binary_Ligation(nA::Int64, nB::Int64, max_L::Int64, kf::Float64, kb::Float64, volume::Float64, tau_max::Float64, tau_freq::Float64 = 0.1, T::Float64 = 300.0, R::Float64= 8.3144598, mA::Int64 = 100, mB::Int64 = 100)
-    ### Unique Experiment number required
-    
-    ## Check for the correct output files and directories
-    param_file = "../data/Binary_Ligation_Run_Parameters.csv"
-    save_dir = "../data/Binary_Ligation_timeseries"
-    
-    if !isdir(save_dir)
-        mkdir(save_dir)
-    end
-    
-        
-    ## Initialize Time values
-    tau = 0.0
-    freq_count = 0.0
-    
-    binary_CRS = generate_binary_ligation_CRS(max_L, kf, kb, volume, T)
-    ### Redo output initialization using DataFrames
-    output_DF = InitializeOutput(binary_CRS)
-               
-    nmolecules = length(binary_CRS.molecule_list)
-    concentrations= zeros(nmolecules)
-    
-    Aindex = binary_CRS.molecule_dict["A"]
-    Bindex = binary_CRS.molecule_dict["B"]
-    concentrations[Aindex] = nA
-    concentrations[Bindex] = nB
-        
-    #Initialize Propensities
-    propensities = CalculatePropensities(concentrations, binary_CRS)
-
-    ####### Main LOOP #######
-    while tau < tau_max
-        # Pick Reaction
-        rID = PickReactionID(propensities)
-        # Execute Reaction
-        concentrations = ExecuteReaction(concentrations, binary_CRS, rID)
-        # Calculate Propensities
-        propensities = CalculatePropensities(concentrations, binary_CRS)
-        # Record Data
-        if tau >= freq_count
-            output_DF[Symbol(freq_count)] = concentrations[:] 
-            freq_count += tau_freq
-            println(tau)
-        end
-
-        #Update Time
-        Ap_tot = sum(propensities)
-        tau -= (log(rand())/Ap_tot) 
-    end
-
-    # Save time series and params
-    save_name, parameter_df = generate_output_data(binary_CRS, save_dir)#
-    println(parameter_df)
-    if !isfile(param_file)
-        CSV.write(param_file, parameter_df)
-    else
-        runs_df = CSV.read(param_file)
-        runs_df = [runs_df; parameter_df]
-    end
-    
-    CSV.write(save_name, output_DF)
-    return concentrations
-end
-
-function Run_MoBlue(Mo1_mass::Int64, total_time::Float64, k_f::Float64, stable_backward::Float64, dimerization_ratio::Float64, mo36_enhance::Float64, wheel_enhancement_multiplier::Float64= 1.0,ball_growth_multipler::Float64 = 1.0,out_count::Float64 = 100.0, volume::Float64 = 1.0, T::Float64 = 300.0, R::Float64= 8.3144598)::Array{Float64,1}
-    
+function Run_MoBlue(seed::Int64,Mo1_mass::Int64, total_time::Float64, k_f::Float64, k_d_stable::Float64, dimerization_ratio::Float64, mo6_enhance::Float64, mo36_enhance::Float64, mo154_enhance::Float64= 1.0,mo132_enhance::Float64 = 1.0,out_count::Float64 = 100.0, volume::Float64 = 1.0, T::Float64 = 300.0, R::Float64= 8.3144598)::Array{Float64,1}
+    #Random.seed!(seed)
     ### Unique Experiment number required
     tau_freq = total_time/out_count
     ## Check for the correct output files and directories
@@ -193,7 +128,7 @@ function Run_MoBlue(Mo1_mass::Int64, total_time::Float64, k_f::Float64, stable_b
     tau = 0.0
     freq_count = 0.0
     
-    MoBlueCRS = make_MoBlueCRS(k_f, stable_backward, dimerization_ratio, mo36_enhance,wheel_enhancement_multiplier,ball_growth_multipler, volume, T, R)::CRS
+    MoBlueCRS = make_MoBlueCRS_brokendown(k_f, k_d_stable, dimerization_ratio,mo6_enhance, mo36_enhance,mo154_enhance,mo132_enhance, volume, T, R)::CRS
     ### Redo output initialization using DataFrames
     output_DF = InitializeOutput(MoBlueCRS)
                
@@ -218,6 +153,8 @@ function Run_MoBlue(Mo1_mass::Int64, total_time::Float64, k_f::Float64, stable_b
         #println("Propensity: ", STD_propensity(MoBlueCRS.reaction_list[rID],concentrations))
         
         # Execute Reaction
+        # println(rID)
+        # println(format_reaction_str(MoBlueCRS,562))
         concentrations = ExecuteReaction(concentrations, MoBlueCRS, rID)::Array{Float64,1}
         
         # Calculate Propensities
@@ -245,7 +182,11 @@ function Run_MoBlue(Mo1_mass::Int64, total_time::Float64, k_f::Float64, stable_b
 
         #Update Time
         Ap_tot = sum(propensities)
-        tau -= (log(rand())/Ap_tot) 
+        delta_tau = -(log(rand())/Ap_tot) 
+        if delta_tau > tau_freq
+            return concentrations
+        end
+        tau += delta_tau
     end
 
     # Save time series and params
